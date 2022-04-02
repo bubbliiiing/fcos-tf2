@@ -14,11 +14,12 @@ class PriorProbability(keras.initializers.Initializer):
         self.probability = probability
 
     def get_config(self):
-        return {'probability': self.probability}
+        return {
+            'probability': self.probability
+        }
 
     def __call__(self, shape, dtype=None):
-        # set bias to -log((1 - p)/p) for foreground
-        result = np.ones(shape, dtype=dtype) * -math.log((1 - self.probability) / self.probability)
+        result = np.ones(shape) * -math.log((1 - self.probability) / self.probability)
         return result
 
 class loc_head():
@@ -55,7 +56,7 @@ class cls_head():
             'kernel_size'        : 3,
             'strides'            : 1,
             'padding'            : 'same',
-            'kernel_initializer' : keras.initializers.normal(mean=0.0, stddev=0.02, seed=None),
+            'kernel_initializer' : keras.initializers.RandomNormal(mean=0.0, stddev=0.02, seed=None),
         }
 
         self.features = []
