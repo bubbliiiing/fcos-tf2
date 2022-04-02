@@ -1,3 +1,6 @@
+import math
+
+import numpy as np
 from tensorflow import keras
 from tensorflow.keras.layers import *
 
@@ -5,6 +8,18 @@ from nets.layers import (GroupNormalization, Locations, RegressBoxes, ScaleExp,
                          UpsampleLike)
 from nets.resnet import ResNet50
 
+
+class PriorProbability(keras.initializers.Initializer):
+    def __init__(self, probability=0.01):
+        self.probability = probability
+
+    def get_config(self):
+        return {'probability': self.probability}
+
+    def __call__(self, shape, dtype=None):
+        # set bias to -log((1 - p)/p) for foreground
+        result = np.ones(shape, dtype=dtype) * -math.log((1 - self.probability) / self.probability)
+        return result
 
 class loc_head():
     def __init__(self, pyramid_feature_size=256):
@@ -40,8 +55,7 @@ class cls_head():
             'kernel_size'        : 3,
             'strides'            : 1,
             'padding'            : 'same',
-            'kernel_initializer' : keras.initializers.RandomNormal(mean=0.0, stddev=0.02, seed=None),
-            'bias_initializer'   : 'zeros'
+            'kernel_initializer' : keras.initializers.normal(mean=0.0, stddev=0.02, seed=None),
         }
 
         self.features = []
@@ -50,7 +64,7 @@ class cls_head():
             self.features.append(GroupNormalization())
             self.features.append(Activation('relu'))
 
-        self.cls_outputs_conv    = Conv2D(filters=num_classes, name='pyramid_classification'.format(), **options)
+        self.cls_outputs_conv    = Conv2D(filters=num_classes, name='pyramid_classification'.format(), bias_initializer = PriorProbability(probability=0.01),**options)
         self.cls_outputs_reshape = Reshape((-1, num_classes), name='pyramid_classification_reshape')
         self.cls_outputs_sigmoid = Activation('sigmoid', name='pyramid_classification_sigmoid')
         
