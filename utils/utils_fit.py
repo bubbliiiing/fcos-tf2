@@ -5,8 +5,10 @@ from nets.fcos_training import bce, focal, iou
 from tqdm import tqdm
 
 
-# 防止bug
-def get_train_step_fn():
+#----------------------#
+#   防止bug
+#----------------------#
+def get_train_step_fn(strategy):
     @tf.function
     def train_step(imgs, targets, net, optimizer):
         with tf.GradientTape() as tape:
@@ -20,7 +22,18 @@ def get_train_step_fn():
         grads = tape.gradient(loss_value, net.trainable_variables)
         optimizer.apply_gradients(zip(grads, net.trainable_variables))
         return loss_value
-    return train_step
+    if strategy == None:
+        return train_step
+    else:
+        #----------------------#
+        #   多gpu训练
+        #----------------------#
+        @tf.function
+        def distributed_train_step(imgs, targets, net, optimizer):
+            per_replica_losses = strategy.run(train_step, args=(imgs, targets, net, optimizer,))
+            return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
+                                    axis=None)
+        return distributed_train_step
 
 def val_step(imgs, targets, net, optimizer):
     classifications, centerness, regressions    = net(imgs, training=False)
@@ -32,8 +45,8 @@ def val_step(imgs, targets, net, optimizer):
     loss_value  = tf.reduce_sum(net.losses) + cls_value + bce_value + reg_value
     return loss_value
 
-def fit_one_epoch(net, loss_history, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, save_period, save_dir):
-    train_step  = get_train_step_fn()
+def fit_one_epoch(net, loss_history, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, save_period, save_dir, strategy):
+    train_step  = get_train_step_fn(strategy)
     loss        = 0
     val_loss    = 0
     print('Start Train')

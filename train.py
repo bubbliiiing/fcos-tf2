@@ -28,6 +28,12 @@ if __name__ == "__main__":
     #----------------------------------------------------#
     eager           = False
     #---------------------------------------------------------------------#
+    #   train_gpu   训练用到的GPU
+    #               默认为第一张卡、双卡为[0, 1]、三卡为[0, 1, 2]
+    #               在使用多GPU时，每个卡上的batch为总batch除以卡的数量。
+    #---------------------------------------------------------------------#
+    train_gpu       = [0,]
+    #---------------------------------------------------------------------#
     #   classes_path    指向model_data下的txt，与自己训练的数据集相关 
     #                   训练前一定要修改classes_path，使其对应自己的数据集
     #---------------------------------------------------------------------#
@@ -167,15 +173,41 @@ if __name__ == "__main__":
     train_annotation_path   = '2007_train.txt'
     val_annotation_path     = '2007_val.txt'
 
+    #------------------------------------------------------#
+    #   设置用到的显卡
+    #------------------------------------------------------#
+    os.environ["CUDA_VISIBLE_DEVICES"]  = ','.join(str(x) for x in train_gpu)
+    ngpus_per_node                      = len(train_gpu)
+    
+    gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+        
+    if ngpus_per_node > 1:
+        strategy = tf.distribute.MirroredStrategy()
+    else:
+        strategy = None
+    print('Number of devices: {}'.format(ngpus_per_node))
+
     class_names, num_classes = get_classes(classes_path)
     
-    model           = FCOS([input_shape[0], input_shape[1], 3], num_classes, strides, mode = "train")
-    if model_path != '':
-        #------------------------------------------------------#
-        #   载入预训练权重
-        #------------------------------------------------------#
-        print('Load weights {}.'.format(model_path))
-        model.load_weights(model_path, by_name=True, skip_mismatch=True)
+    if ngpus_per_node > 1:
+        with strategy.scope():
+            model           = FCOS([input_shape[0], input_shape[1], 3], num_classes, strides, mode = "train")
+            if model_path != '':
+                #------------------------------------------------------#
+                #   载入预训练权重
+                #------------------------------------------------------#
+                print('Load weights {}.'.format(model_path))
+                model.load_weights(model_path, by_name=True, skip_mismatch=True)
+    else:
+        model           = FCOS([input_shape[0], input_shape[1], 3], num_classes, strides, mode = "train")
+        if model_path != '':
+            #------------------------------------------------------#
+            #   载入预训练权重
+            #------------------------------------------------------#
+            print('Load weights {}.'.format(model_path))
+            model.load_weights(model_path, by_name=True, skip_mismatch=True)
 
     #---------------------------#
     #   读取数据集对应的txt
@@ -295,19 +327,26 @@ if __name__ == "__main__":
                 K.set_value(optimizer.lr, lr)
 
                 fit_one_epoch(model, loss_history, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, 
-                            end_epoch, save_period, save_dir)
+                            end_epoch, save_period, save_dir, strategy)
 
                 train_dataloader.on_epoch_end()
                 val_dataloader.on_epoch_end()
         else:
             start_epoch = Init_Epoch
             end_epoch   = Freeze_Epoch if Freeze_Train else UnFreeze_Epoch
-            
-            model.compile(loss={
-                        'classification': focal(),
-                        'centerness'    : bce(),
-                        'regression'    : iou(),
-                    },optimizer=optimizer)
+            if ngpus_per_node > 1:
+                with strategy.scope():
+                    model.compile(loss={
+                                'classification': focal(),
+                                'centerness'    : bce(),
+                                'regression'    : iou(),
+                            },optimizer=optimizer)
+            else:
+                model.compile(loss={
+                            'classification': focal(),
+                            'centerness'    : bce(),
+                            'regression'    : iou(),
+                        },optimizer=optimizer)
             
             #-------------------------------------------------------------------------------#
             #   训练参数的设置
@@ -365,11 +404,19 @@ if __name__ == "__main__":
                 
                 for i in range(len(model.layers)): 
                     model.layers[i].trainable = True
-                model.compile(loss={
-                            'classification': focal(),
-                            'centerness'    : bce(),
-                            'regression'    : iou(),
-                        },optimizer=optimizer)
+                if ngpus_per_node > 1:
+                    with strategy.scope():
+                        model.compile(loss={
+                                    'classification': focal(),
+                                    'centerness'    : bce(),
+                                    'regression'    : iou(),
+                                },optimizer=optimizer)
+                else:
+                    model.compile(loss={
+                                'classification': focal(),
+                                'centerness'    : bce(),
+                                'regression'    : iou(),
+                            },optimizer=optimizer)
 
                 epoch_step      = num_train // batch_size
                 epoch_step_val  = num_val // batch_size
