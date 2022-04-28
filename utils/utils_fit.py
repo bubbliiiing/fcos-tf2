@@ -35,18 +35,37 @@ def get_train_step_fn(strategy):
                                     axis=None)
         return distributed_train_step
 
-def val_step(imgs, targets, net, optimizer):
-    classifications, centerness, regressions    = net(imgs, training=False)
-    cls_targets, cnt_targets, reg_targets       = targets
-    
-    cls_value   = focal()(cls_targets, classifications)
-    bce_value   = bce()(cnt_targets, centerness)
-    reg_value   = iou()(reg_targets, regressions)
-    loss_value  = tf.reduce_sum(net.losses) + cls_value + bce_value + reg_value
-    return loss_value
+#----------------------#
+#   防止bug
+#----------------------#
+def get_val_step_fn(strategy):
+    @tf.function
+    def val_step(imgs, targets, net, optimizer):
+        classifications, centerness, regressions    = net(imgs, training=False)
+        cls_targets, cnt_targets, reg_targets       = targets
+        
+        cls_value   = focal()(cls_targets, classifications)
+        bce_value   = bce()(cnt_targets, centerness)
+        reg_value   = iou()(reg_targets, regressions)
+        loss_value  = tf.reduce_sum(net.losses) + cls_value + bce_value + reg_value
+        return loss_value
+    if strategy == None:
+        return val_step
+    else:
+        #----------------------#
+        #   多gpu验证
+        #----------------------#
+        @tf.function
+        def distributed_val_step(imgs, targets, net, optimizer):
+            per_replica_losses = strategy.run(val_step, args=(imgs, targets, net, optimizer,))
+            return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses,
+                                    axis=None)
+        return distributed_val_step
 
 def fit_one_epoch(net, loss_history, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, save_period, save_dir, strategy):
     train_step  = get_train_step_fn(strategy)
+    val_step    = get_val_step_fn(strategy)
+    
     loss        = 0
     val_loss    = 0
     print('Start Train')
@@ -56,7 +75,6 @@ def fit_one_epoch(net, loss_history, optimizer, epoch, epoch_step, epoch_step_va
                 break
             images, target0, target1, target2 = batch[0], batch[1], batch[2], batch[3]
             targets     = [target0, target1, target2]
-            targets     = [tf.convert_to_tensor(target) for target in targets]
             loss_value  = train_step(images, targets, net, optimizer)
             loss        = loss + loss_value
 
@@ -72,11 +90,10 @@ def fit_one_epoch(net, loss_history, optimizer, epoch, epoch_step, epoch_step_va
                 break
             images, target0, target1, target2 = batch[0], batch[1], batch[2], batch[3]
             targets     = [target0, target1, target2]
-            targets     = [tf.convert_to_tensor(target) for target in targets]
             loss_value  = val_step(images, targets, net, optimizer)
             val_loss    = val_loss + loss_value
 
-            pbar.set_postfix(**{'total_loss': float(val_loss) / (iteration + 1)})
+            pbar.set_postfix(**{'val_loss': float(val_loss) / (iteration + 1)})
             pbar.update(1)
     print('Finish Validation')
 
