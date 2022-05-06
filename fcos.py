@@ -8,7 +8,8 @@ from PIL import ImageDraw, ImageFont
 from tensorflow.keras import backend as K
 
 from nets.fcos import FCOS
-from utils.utils import cvtColor, get_classes, preprocess_input, resize_image
+from utils.utils import (cvtColor, get_classes, preprocess_input, resize_image,
+                         show_config)
 from utils.utils_bbox import BBoxUtility
 
 
@@ -70,9 +71,19 @@ class Fcos(object):
         #   获得种类和先验框的数量
         #---------------------------------------------------#
         self.class_names, self.num_classes = get_classes(self.classes_path)
+
+        #---------------------------------------------------#
+        #   画框设置不同的颜色
+        #---------------------------------------------------#
+        hsv_tuples  = [(x / self.num_classes, 1., 1.) for x in range(self.num_classes)]
+        self.colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
+        self.colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), self.colors))
         
         self.bbox_util = BBoxUtility(self.num_classes, nms_thresh=self.nms_iou)
+
         self.generate()
+
+        show_config(**self._defaults)
 
     #---------------------------------------------------#
     #   获得所有的分类
@@ -82,18 +93,8 @@ class Fcos(object):
         assert model_path.endswith('.h5'), 'Keras model or weights must be a .h5 file.'
 
         self.model = FCOS([None, None, 3], self.num_classes)
-        self.model.load_weights(self.model_path, by_name = True, skip_mismatch=True)
-
+        self.model.load_weights(self.model_path, by_name=True)
         print('{} model, and classes loaded.'.format(model_path))
-        #-----------------------#
-        #   画框设置不同的颜色
-        #-----------------------#
-        hsv_tuples = [(x / len(self.class_names), 1., 1.)
-                      for x in range(len(self.class_names))]
-        self.colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
-        self.colors = list(
-            map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
-                self.colors))
 
     @tf.function
     def get_pred(self, photo):
@@ -103,7 +104,7 @@ class Fcos(object):
     #---------------------------------------------------#
     #   检测图片
     #---------------------------------------------------#
-    def detect_image(self, image, crop):
+    def detect_image(self, image, crop = False, count = False):
         #---------------------------------------------------#
         #   获得输入图片的高和宽
         #---------------------------------------------------#
@@ -143,7 +144,18 @@ class Fcos(object):
         #---------------------------------------------------------#
         font = ImageFont.truetype(font='model_data/simhei.ttf', size=np.floor(3e-2 * np.shape(image)[1] + 0.5).astype('int32'))
         thickness = max((np.shape(image)[0] + np.shape(image)[1]) // self.input_shape[0], 1)
-    
+        #---------------------------------------------------------#
+        #   计数
+        #---------------------------------------------------------#
+        if count:
+            print("top_label:", top_label)
+            classes_nums    = np.zeros([self.num_classes])
+            for i in range(self.num_classes):
+                num = np.sum(top_label == i)
+                if num > 0:
+                    print(self.class_names[i], " : ", num)
+                classes_nums[i] = num
+            print("classes_nums:", classes_nums)
         #---------------------------------------------------------#
         #   是否进行目标的裁剪
         #---------------------------------------------------------#

@@ -15,13 +15,27 @@ from nets.fcos_training import bce, focal, get_lr_scheduler, iou
 from utils.callbacks import (ExponentDecayScheduler, LossHistory,
                              ModelCheckpoint)
 from utils.dataloader import FcosDatasets
-from utils.utils import get_classes
+from utils.utils import get_classes, show_config
 from utils.utils_fit import fit_one_epoch
 
-gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
-for gpu in gpus:
-    tf.config.experimental.set_memory_growth(gpu, True)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+'''
+训练自己的目标检测模型一定需要注意以下几点：
+1、训练前仔细检查自己的格式是否满足要求，该库要求数据集格式为VOC格式，需要准备好的内容有输入图片和标签
+   输入图片为.jpg图片，无需固定大小，传入训练前会自动进行resize。
+   灰度图会自动转成RGB图片进行训练，无需自己修改。
+   输入图片如果后缀非jpg，需要自己批量转成jpg后再开始训练。
+
+   标签为.xml格式，文件中会有需要检测的目标信息，标签文件和输入图片文件相对应。
+
+2、损失值的大小用于判断是否收敛，比较重要的是有收敛的趋势，即验证集损失不断下降，如果验证集损失基本上不改变的话，模型基本上就收敛了。
+   损失值的具体大小并没有什么意义，大和小只在于损失的计算方式，并不是接近于0才好。如果想要让损失好看点，可以直接到对应的损失函数里面除上10000。
+   训练过程中的损失值会保存在logs文件夹下的loss_%Y_%m_%d_%H_%M_%S文件夹中
+   
+3、训练好的权值文件保存在logs文件夹中，每个训练世代（Epoch）包含若干训练步长（Step），每个训练步长（Step）进行一次梯度下降。
+   如果只是训练了几个Step是不会保存的，Epoch和Step的概念要捋清楚一下。
+'''
 if __name__ == "__main__":
     #----------------------------------------------------#
     #   是否使用eager模式训练
@@ -75,8 +89,8 @@ if __name__ == "__main__":
     #           Init_Epoch = 0，Freeze_Epoch = 50，UnFreeze_Epoch = 100，Freeze_Train = True，optimizer_type = 'adam'，Init_lr = 3e-4，weight_decay = 0。（冻结）
     #           Init_Epoch = 0，UnFreeze_Epoch = 100，Freeze_Train = False，optimizer_type = 'adam'，Init_lr = 3e-4，weight_decay = 0。（不冻结）
     #       SGD：
-    #           Init_Epoch = 0，Freeze_Epoch = 50，UnFreeze_Epoch = 100，Freeze_Train = True，optimizer_type = 'sgd'，Init_lr = 1e-2，weight_decay = 1e-4。（冻结）
-    #           Init_Epoch = 0，UnFreeze_Epoch = 100，Freeze_Train = False，optimizer_type = 'sgd'，Init_lr = 1e-2，weight_decay = 1e-4。（不冻结）
+    #           Init_Epoch = 0，Freeze_Epoch = 50，UnFreeze_Epoch = 200，Freeze_Train = True，optimizer_type = 'sgd'，Init_lr = 1e-2，weight_decay = 1e-4。（冻结）
+    #           Init_Epoch = 0，UnFreeze_Epoch = 200，Freeze_Train = False，optimizer_type = 'sgd'，Init_lr = 1e-2，weight_decay = 1e-4。（不冻结）
     #       其中：UnFreeze_Epoch可以在100-300之间调整。
     #   （二）从主干网络的预训练权重开始训练：
     #       Adam：
@@ -152,9 +166,9 @@ if __name__ == "__main__":
     #------------------------------------------------------------------#
     lr_decay_type       = 'cos'
     #------------------------------------------------------------------#
-    #   save_period     多少个epoch保存一次权值，默认每个世代都保存
+    #   save_period     多少个epoch保存一次权值
     #------------------------------------------------------------------#
-    save_period         = 1
+    save_period         = 5
     #------------------------------------------------------------------#
     #   save_dir        权值与日志文件保存的文件夹
     #------------------------------------------------------------------#
@@ -195,8 +209,14 @@ if __name__ == "__main__":
         strategy = None
     print('Number of devices: {}'.format(ngpus_per_node))
 
+    #----------------------------------------------------#
+    #   获取classes
+    #----------------------------------------------------#
     class_names, num_classes = get_classes(classes_path)
-    
+
+    #----------------------------------------------------#
+    #   判断是否多GPU载入模型和预训练权重
+    #----------------------------------------------------#
     if ngpus_per_node > 1:
         with strategy.scope():
             model           = FCOS([input_shape[0], input_shape[1], 3], num_classes, strides, mode = "train")
@@ -224,6 +244,26 @@ if __name__ == "__main__":
         val_lines   = f.readlines()
     num_train   = len(train_lines)
     num_val     = len(val_lines)
+
+    show_config(
+        classes_path = classes_path, model_path = model_path, input_shape = input_shape, \
+        Init_Epoch = Init_Epoch, Freeze_Epoch = Freeze_Epoch, UnFreeze_Epoch = UnFreeze_Epoch, Freeze_batch_size = Freeze_batch_size, Unfreeze_batch_size = Unfreeze_batch_size, Freeze_Train = Freeze_Train, \
+        Init_lr = Init_lr, Min_lr = Min_lr, optimizer_type = optimizer_type, momentum = momentum, lr_decay_type = lr_decay_type, \
+        save_period = save_period, save_dir = save_dir, num_workers = num_workers, num_train = num_train, num_val = num_val
+    )
+    #---------------------------------------------------------#
+    #   总训练世代指的是遍历全部数据的总次数
+    #   总训练步长指的是梯度下降的总次数 
+    #   每个训练世代包含若干训练步长，每个训练步长进行一次梯度下降。
+    #   此处仅建议最低训练世代，上不封顶，计算时只考虑了解冻部分
+    #----------------------------------------------------------#
+    wanted_step = 5e4 if optimizer_type == "sgd" else 1.5e4
+    total_step  = num_train // Unfreeze_batch_size * UnFreeze_Epoch
+    if total_step <= wanted_step:
+        wanted_epoch = wanted_step // (num_train // Unfreeze_batch_size) + 1
+        print("\n\033[1;33;44m[Warning] 使用%s优化器时，建议将训练总步长设置到%d以上。\033[0m"%(optimizer_type, wanted_step))
+        print("\033[1;33;44m[Warning] 本次运行的总训练数据量为%d，Unfreeze_batch_size为%d，共训练%d个Epoch，计算出总训练步长为%d。\033[0m"%(num_train, Unfreeze_batch_size, UnFreeze_Epoch, total_step))
+        print("\033[1;33;44m[Warning] 由于总训练步长为%d，小于建议总步长%d，建议设置总世代为%d。\033[0m"%(total_step, wanted_step, wanted_epoch))
 
     #------------------------------------------------------#
     #   主干特征提取网络特征通用，冻结训练可以加快训练速度
@@ -361,7 +401,6 @@ if __name__ == "__main__":
                             'centerness'    : bce(),
                             'regression'    : iou(),
                         },optimizer=optimizer)
-            
             #-------------------------------------------------------------------------------#
             #   训练参数的设置
             #   logging         用于设置tensorboard的保存地址
@@ -375,9 +414,13 @@ if __name__ == "__main__":
             loss_history    = LossHistory(log_dir)
             checkpoint      = ModelCheckpoint(os.path.join(save_dir, "ep{epoch:03d}-loss{loss:.3f}-val_loss{val_loss:.3f}.h5"), 
                                     monitor = 'val_loss', save_weights_only = True, save_best_only = False, period = save_period)
+            checkpoint_last = ModelCheckpoint(os.path.join(save_dir, "last_epoch_weights.h5"), 
+                                    monitor = 'val_loss', save_weights_only = True, save_best_only = False, period = 1)
+            checkpoint_best = ModelCheckpoint(os.path.join(save_dir, "best_epoch_weights.h5"), 
+                                    monitor = 'val_loss', save_weights_only = True, save_best_only = True, period = 1)
             early_stopping  = EarlyStopping(monitor='val_loss', min_delta = 0, patience = 10, verbose = 1)
             lr_scheduler    = LearningRateScheduler(lr_scheduler_func, verbose = 1)
-            callbacks       = [logging, loss_history, checkpoint, lr_scheduler]
+            callbacks       = [logging, loss_history, checkpoint, checkpoint_last, checkpoint_best, lr_scheduler]
 
             if start_epoch < end_epoch:
                 print('Train on {} samples, val on {} samples, with batch size {}.'.format(num_train, num_val, batch_size))
@@ -414,7 +457,7 @@ if __name__ == "__main__":
                 #---------------------------------------#
                 lr_scheduler_func = get_lr_scheduler(lr_decay_type, Init_lr_fit, Min_lr_fit, UnFreeze_Epoch)
                 lr_scheduler    = LearningRateScheduler(lr_scheduler_func, verbose = 1)
-                callbacks       = [logging, loss_history, checkpoint, lr_scheduler]
+                callbacks       = [logging, loss_history, checkpoint, checkpoint_last, checkpoint_best, lr_scheduler]
                 
                 for i in range(len(model.layers)): 
                     model.layers[i].trainable = True

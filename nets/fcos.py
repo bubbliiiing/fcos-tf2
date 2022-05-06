@@ -87,7 +87,7 @@ class cls_head():
         outputs_cet = self.cet_outputs_sigmoid(outputs_cet)
         return [outputs_cls, outputs_cet]
 
-def FCOS(inputs_shape, num_classes, strides=[8, 16, 32, 64, 128], backbone="resnet50", mode="predict"):
+def FCOS(inputs_shape, num_classes, strides=[8, 16, 32, 64, 128], mode="predict"):
     inputs      = Input(shape=inputs_shape)
 
     C3, C4, C5  = ResNet50(inputs)
