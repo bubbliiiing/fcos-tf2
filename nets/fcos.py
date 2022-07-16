@@ -147,11 +147,17 @@ def FCOS(inputs_shape, num_classes, strides=[8, 16, 32, 64, 128], mode="predict"
     if mode == "train":
         pyramids = [classifications, centerness, regressions]
         model = keras.models.Model(inputs=inputs, outputs=pyramids, name="FCOS")
-        return model
-    else:
-        locations       = Locations(strides, name='locations')(features)
-        boxes           = RegressBoxes(name='boxes')([locations, regressions])
+        
+        locations   = Locations(strides, name='locations')(features)
+        boxes       = RegressBoxes(name='boxes')([locations, regressions])
 
-        pyramids        = [classifications, centerness, boxes]
-        model           = keras.models.Model(inputs=inputs, outputs=pyramids, name="FCOS")
+        pyramids    = [classifications, centerness, boxes]
+        prediction_model = keras.models.Model(inputs=inputs, outputs=pyramids, name="FCOS_Predict")
+        return model, prediction_model
+    else:
+        locations   = Locations(strides, name='locations')(features)
+        boxes       = RegressBoxes(name='boxes')([locations, regressions])
+
+        pyramids    = [classifications, centerness, boxes]
+        model       = keras.models.Model(inputs=inputs, outputs=pyramids, name="FCOS")
         return model
